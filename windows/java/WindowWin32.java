@@ -78,7 +78,9 @@ public class WindowWin32 extends Window {
 
     @Override
     public Window setTitlebarVisible(boolean value) {
-        throw new UnsupportedOperationException("impl me!");
+        assert _onUIThread();
+        _nSetTitlebarVisible(value);
+        return this;
     }
 
     @Override
@@ -224,6 +226,7 @@ public class WindowWin32 extends Window {
     @ApiStatus.Internal public native void _nSetWindowSize(int width, int height);
     @ApiStatus.Internal public native void _nSetContentSize(int width, int height);
     @ApiStatus.Internal public native void _nSetTitle(String title);
+    @ApiStatus.Internal public native void _nSetTitlebarVisible(boolean isVisible);
     @ApiStatus.Internal public native void _nSetIcon(String iconPath);
     @ApiStatus.Internal public native void _nSetVisible(boolean isVisible);
     @ApiStatus.Internal public native void _nSetOpacity(float opacity);

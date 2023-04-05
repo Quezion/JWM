@@ -70,6 +70,20 @@ void jwm::WindowWin32::setTitle(const std::wstring& title) {
     SetWindowTextW(_hWnd, title.c_str());
 }
 
+void jwm::WindowWin32::setTitlebarVisible(bool isVisible) {
+    JWM_VERBOSE("Set titlebar visible=" << isVisible << " for window 0x" << this);
+    // SetWindowLong(hWnd, GWL_STYLE, WS_POPUP);
+    //SetWindowLong(_hWnd, GWL_STYLE, WS_POPUP);
+
+    LONG_PTR lStyle = GetWindowLongPtr(_hWnd, GWL_STYLE);
+    lStyle &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+    SetWindowLongPtr(_hWnd, GWL_STYLE, lStyle); // supposed to use Ptr version for 64 bit?
+
+    // TODO: how to actually restore the normal titlebar when true is passed?
+}
+
+
+
 void jwm::WindowWin32::setIcon(const std::wstring& iconPath) {
     JWM_VERBOSE("Set window icon '" << iconPath << "'");
     // width / height of 0 along with LR_DEFAULTSIZE tells windows to load the default icon size.
@@ -1005,12 +1019,18 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nSet
 }
 
 extern "C" JNIEXPORT void JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nSetTitle
-        (JNIEnv* env, jobject obj, jstring title) {
+(JNIEnv* env, jobject obj, jstring title) {
     jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
     const jchar* titleStr = env->GetStringChars(title, nullptr);
     jsize length = env->GetStringLength(title);
     instance->setTitle(std::wstring(reinterpret_cast<const wchar_t*>(titleStr), length));
     env->ReleaseStringChars(title, titleStr);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nSetTitlebarVisible
+(JNIEnv* env, jobject obj, jboolean isVisible) {
+    jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
+    instance->setTitlebarVisible(isVisible);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nSetIcon
