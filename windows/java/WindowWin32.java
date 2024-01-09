@@ -217,6 +217,31 @@ public class WindowWin32 extends Window {
         return this;
     }
 
+    public long findWindow(String className, String windowName) {
+        assert _onUIThread();
+        return _nFindWindow(className, windowName);
+    }
+
+    public long findWindowByTitle(String name) {
+        assert _onUIThread();
+        return _nFindWindowByTitle(name);
+    }
+
+    public boolean bringTargetToFront(long hwnd) {
+        assert _onUIThread();
+        return _nBringTargetToFront(hwnd);
+    }
+
+    public String returnJString(String jString) {
+        assert _onUIThread();
+        return _nReturnJString(jString);
+    }
+
+    public String enumWindows() {
+        assert _onUIThread();
+        return _nEnumWindows();
+    }
+
     @ApiStatus.Internal public static native long _nMake();
     @ApiStatus.Internal public native void _nSetTextInputEnabled(boolean enabled);
     @ApiStatus.Internal public native void _nUnmarkText();
@@ -242,4 +267,9 @@ public class WindowWin32 extends Window {
     @ApiStatus.Internal public native boolean _nIsFront();
     @ApiStatus.Internal public native void _nClose();
     @ApiStatus.Internal public native void _nWinSetParent(long hwnd);
+    @ApiStatus.Internal public native long _nFindWindow(String className, String windowName);
+    @ApiStatus.Internal public native long _nFindWindowByTitle(String windowName);
+    @ApiStatus.Internal public native boolean _nBringTargetToFront(long hwnd);
+    @ApiStatus.Internal public native String _nReturnJString(String jString);
+    @ApiStatus.Internal public native String _nEnumWindows();
 }

@@ -9,6 +9,9 @@
 #include <MouseButton.hh>
 #include <Log.hh>
 #include <memory>
+#include <sstream>
+#include <iterator>
+#include <iostream>
 
 jwm::WindowWin32::WindowWin32(JNIEnv *env, class WindowManagerWin32 &windowManagerWin32)
         : Window(env), _windowManager(windowManagerWin32) {
@@ -82,7 +85,187 @@ void jwm::WindowWin32::setTitlebarVisible(bool isVisible) {
     // TODO: how to actually restore the normal titlebar when true is passed?
 }
 
+// JNI spec -- https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/functions.html#NewString
+// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-findwindowa
+// BUG: passing null for lpClassName will cause nullptr
+// BUG: something is probably bad about the wstring casts here, still need to get working
+//      see returnJString comment about wide-char strings
+HWND jwm::WindowWin32::findWindow(const std::wstring& lpClassName, const std::wstring& lpWindowName) {
+    // Not sure if below VERBOSE is safe, so disabled until tested
+    // JWM_VERBOSE("Find window=" << lpClassName << ", " << lpWindowName << " for window 0x" << this);
+    JWM_VERBOSE("Find window for window 0x" << this);
+    LPCWSTR lpwClassName = NULL;
+    LPCWSTR lpwWindowName = NULL;
+    if (lpClassName[0] != '\0') {
+        lpwClassName = lpClassName.c_str();
+    }
+    if (lpWindowName[0] != '\0') {
+        lpwWindowName = lpWindowName.c_str();
+    }
+    HWND hFoundWindow = FindWindow(lpwClassName, lpwWindowName);
+    return hFoundWindow;
+}
 
+// HWND jwm::WindowWin32::findWindowNameOriginal(const std::wstring& lpWindowName) {
+//     JWM_VERBOSE("Find window=" << ", " << lpWindowName << " for window 0x" << this);
+//     LPCWSTR lpwWindowName = lpWindowName.c_str();
+//     HWND hFoundWindow = FindWindow(NULL, lpwWindowName);
+
+//     return hFoundWindow;
+// }
+
+struct hWndMatcher {
+    HWND window;
+    //int matchLength;
+    char match[MAX_PATH];
+};
+
+static BOOL CALLBACK findWindowByTitleCallback(HWND hWnd, LPARAM lParam) {
+    hWndMatcher& hWndMatch = *reinterpret_cast<hWndMatcher*>(lParam);
+    char winName[MAX_PATH];
+
+    short length = (short)SendMessageA(hWnd, WM_GETTEXT, sizeof(winName), (LPARAM)winName);
+    if (IsWindowVisible(hWnd) &&
+        length != 0 &&
+        strstr(winName, hWndMatch.match) != NULL)
+    {
+        hWndMatch.window = hWnd;
+        return FALSE; // end enumeration
+    }
+    return TRUE;
+}
+
+HWND jwm::WindowWin32::findWindowByTitle(jstring lpWindowName) {
+    JWM_VERBOSE("Find window by title using window 0x" << this);
+
+    JNIEnv* env = getJNIEnv();
+    const char *nativeString = env->GetStringUTFChars(lpWindowName, 0);
+
+    struct hWndMatcher hWndMatch;
+    hWndMatch.window = NULL;
+    strcpy(hWndMatch.match, nativeString);
+
+    EnumWindows(findWindowByTitleCallback, reinterpret_cast<LPARAM>(&hWndMatch));
+
+    env->ReleaseStringUTFChars(lpWindowName, nativeString);
+    return hWndMatch.window;
+}
+
+// Proof of concept function to prove different string casts work
+jstring jwm::WindowWin32::returnJString(jstring jString) {
+    JWM_VERBOSE("Returning jString using window 0x" << this);
+
+    // WORKING - Cast jString to cString & back
+    // JNIEnv* env = getJNIEnv();
+    // const char *nativeString = env->GetStringUTFChars(jString, 0);
+    // jstring newJString = env->NewStringUTF(nativeString);
+    // env->ReleaseStringUTFChars(jString, nativeString);
+
+    // WORKING - Cast jString to cString on hWndMatch, then back
+    JNIEnv* env = getJNIEnv();
+    const char *nativeString = env->GetStringUTFChars(jString, 0);
+    struct hWndMatcher hWndMatch;
+    strcpy(hWndMatch.match, nativeString);
+    char *newCString = _strdup(hWndMatch.match);
+    env->ReleaseStringUTFChars(jString, nativeString);
+    jstring newJString = env->NewStringUTF(newCString);
+
+    // TODO - Cast to C wide-char 'LPCWSTR' & back, which would enable UTF text searching
+    //        over Windows window title characters like 'TM'
+
+    return newJString;
+}
+
+const int WIN_NAME_MAX_LENGTH = 300;
+
+static BOOL CALLBACK enumWindowsCallback(HWND hWnd, LPARAM lParam) {
+    std::vector<std::string>& windowTitles = *reinterpret_cast<std::vector<std::string>*>(lParam);
+    char winName[WIN_NAME_MAX_LENGTH];
+
+    short length = (short)SendMessageA(hWnd, WM_GETTEXT, sizeof(winName), (LPARAM)winName);
+    if (IsWindowVisible(hWnd) &&
+        length != 0) {
+        std::string cppString = winName;
+        windowTitles.push_back(cppString.substr(0, length));
+    }
+    return TRUE;
+}
+
+jstring jwm::WindowWin32::enumWindows() {
+    JWM_VERBOSE("Enum windows using window 0x" << this);
+
+    std::vector<std::string> windowTitles;
+
+    EnumWindows(enumWindowsCallback, reinterpret_cast<LPARAM>(&windowTitles));
+
+    if (windowTitles.size() > 0) {
+        const char* const delimiter = ",";
+        std::ostringstream oss;
+        copy(windowTitles.begin(),
+             windowTitles.end(),
+             std::ostream_iterator<std::string>(oss,delimiter));
+        std::string result = oss.str();
+
+        JNIEnv* env = getJNIEnv();
+        jstring jtext = env->NewStringUTF(result.c_str());
+
+        return jtext;
+    }
+    return NULL;
+}
+
+// char* join_strings(char* strings[], char* seperator, int count) {
+//     char* str = NULL;             /* Pointer to the joined strings  */
+//     size_t total_length = 0;      /* Total length of joined strings */
+//     int i = 0;                    /* Loop counter                   */
+
+//     /* Find total length of joined strings */
+//     for (i = 0; i < count; i++) total_length += strlen(strings[i]);
+//     total_length++;     /* For joined string terminator */
+//     total_length += strlen(seperator) * (count - 1); // for seperators
+
+//     str = (char*) malloc(total_length);  /* Allocate memory for joined strings */
+//     str[0] = '\0';                      /* Empty string we can append to      */
+
+//     /* Append all the strings */
+//     for (i = 0; i < count; i++) {
+//         strcat(str, strings[i]);
+//         if (i < (count - 1)) strcat(str, seperator);
+//     }
+
+//     return str;
+// }
+
+// static BOOL CALLBACK enumWindowsCallback(HWND hWnd, LPARAM lParam) {
+//     std::vector<jlong>& windowProcessIds =
+//         *reinterpret_cast<std::vector<jlong>*>(lParam);
+
+//     jlong longProcessId = reinterpret_cast<jlong>(hWnd);
+//     windowProcessIds.push_back(longProcessId);
+
+//     return TRUE;
+// }
+
+// TODO: comment out all of this code
+//       implement findWindowName using the EnumWindows API
+//       should return first PID where process title matched input string
+// jstring jwm::WindowWin32::enumWindows() {
+//     JWM_VERBOSE("Enum window for window 0x" << this);
+//     JNIEnv* env = getJNIEnv();
+
+//     std::vector<jlong> windowProcessIds;
+//     EnumWindows(enumWindowsCallback, reinterpret_cast<LPARAM>(&windowProcessIds));
+
+//     // TODO: concatenate HWND windowProcessIds into string
+//     //return join_strings(windowProcessIds, ',', windowProcessIds.size());
+
+//     // char jCharText[] = "lol";
+//     // int jLength = 4;
+//     // JNILocal<jstring> text(env, env->NewString(jCharText, jLength));
+
+//     return text;
+//     //return hFoundWindow;
+// }
 
 void jwm::WindowWin32::setIcon(const std::wstring& iconPath) {
     JWM_VERBOSE("Set window icon '" << iconPath << "'");
@@ -113,8 +296,8 @@ float jwm::WindowWin32::getOpacity() {
     BYTE alpha;
     DWORD flags = LWA_ALPHA;
     BOOL hasOpacity = GetLayeredWindowAttributes(_hWnd, nullptr, &alpha, &flags);
-    // GetLayeredWindowAttributes can be invoked iff the application 
-    // has previously called SetLayeredWindowAttributes on the window. 
+    // GetLayeredWindowAttributes can be invoked iff the application
+    // has previously called SetLayeredWindowAttributes on the window.
     // Otherwise it returns false as failure.
     if (!hasOpacity)
     {
@@ -155,7 +338,7 @@ void jwm::WindowWin32::setMouseCursor(MouseCursor cursor) {
             break;
         case MouseCursor::RESIZE_NS:
             cursorName = IDC_SIZENS;
-            break;        
+            break;
         case MouseCursor::RESIZE_WE:
             cursorName = IDC_SIZEWE;
             break;
@@ -165,7 +348,7 @@ void jwm::WindowWin32::setMouseCursor(MouseCursor cursor) {
         case MouseCursor::RESIZE_NWSE:
             cursorName = IDC_SIZENWSE;
             break;
-        
+
         default:
             break;
     }
@@ -212,6 +395,61 @@ void jwm::WindowWin32::bringToFront() {
     AttachThreadInput(currentThreadId, jwmThreadId, true);
     SetForegroundWindow(_hWnd);
     AttachThreadInput(currentThreadId, jwmThreadId, false);
+}
+
+// Bring arbitrary HWND to the front of Windows OS & returns whether successful
+bool jwm::WindowWin32::bringTargetToFront(HWND hWnd) {
+    JWM_VERBOSE("Bring target to front of window 0x=" << this);
+    HWND fgHWnd = GetForegroundWindow();
+    long fgThreadId = GetWindowThreadProcessId(fgHWnd, NULL);
+    long jwmThreadId = GetCurrentThreadId();
+    long targetThreadId = GetWindowThreadProcessId(hWnd, NULL);
+    bool attachedJwmFg = false;
+    bool attachedFgTarget = false;
+
+    if (targetThreadId != fgThreadId) {
+        if (targetThreadId != jwmThreadId && IsHungAppWindow(hWnd)) { // short circuit when hung
+            return false;
+        }
+
+        if (IsIconic(hWnd)) { // handle minimized windows
+            ShowWindow(hWnd, SW_RESTORE);
+        }
+
+        // Running attach of thread-inputs makes focus more likely to succeed
+        if (fgThreadId && fgThreadId != jwmThreadId && !IsHungAppWindow(fgHWnd)) {
+            AttachThreadInput(jwmThreadId, fgThreadId, TRUE);
+            attachedJwmFg = true != 0;
+        }
+        if (fgThreadId && targetThreadId && fgThreadId != targetThreadId) {
+            AttachThreadInput(fgThreadId, targetThreadId, TRUE);
+            attachedFgTarget = true != 0;
+        }
+
+        Sleep(10);
+        // NOTE: keybd_event doesn't seem necessary in some circumstances
+        //       but unknown which (could vary based on Windows OS & other factors)
+        //       Leaving enabled as a result
+        keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0); // press alt+up a couple times
+        Sleep(10);
+        keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+        Sleep(10);
+        BOOL result = SetForegroundWindow(hWnd);
+
+        if (attachedJwmFg == true) {
+            AttachThreadInput(jwmThreadId, fgThreadId, FALSE);
+        }
+        if (attachedFgTarget == true) {
+            AttachThreadInput(fgThreadId, targetThreadId, FALSE);
+        }
+        if (result == TRUE) {
+            Sleep(10);
+            HWND postFgHWnd = GetForegroundWindow();
+            return postFgHWnd == hWnd;
+        }
+        return false;
+    }
+    return false;
 }
 
 bool jwm::WindowWin32::isFront() {
@@ -1114,7 +1352,7 @@ extern "C" JNIEXPORT bool JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nIsF
 }
 
 extern "C" JNIEXPORT void JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nClose
-        (JNIEnv* env, jobject obj) {
+(JNIEnv* env, jobject obj) {
     jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
     instance->close();
 }
@@ -1123,4 +1361,43 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nWin
         (JNIEnv* env, jobject obj, jlong hwnd) {
     jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
     SetParent(instance->getHWnd(), (HWND) hwnd);
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nFindWindow
+(JNIEnv* env, jobject obj, jstring lpClassName, jstring lpWindowName) {
+    jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
+    jsize length1 = env->GetStringLength(lpClassName);
+    jsize length2 = env->GetStringLength(lpWindowName);
+    HWND result = instance->findWindow(std::wstring(reinterpret_cast<const wchar_t*>(lpClassName), length1),
+                                       std::wstring(reinterpret_cast<const wchar_t*>(lpWindowName), length2));
+
+    return reinterpret_cast<jlong>(result);
+}
+
+extern "C" JNIEXPORT bool JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nBringTargetToFront
+(JNIEnv* env, jobject obj, jlong hWnd) {
+    jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
+    return instance->bringTargetToFront( (HWND) hWnd);
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nFindWindowByTitle
+(JNIEnv* env, jobject obj, jstring lpWindowName) {
+    jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
+    HWND result = instance->findWindowByTitle(lpWindowName);
+
+    return reinterpret_cast<jlong>(result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nReturnJString
+(JNIEnv* env, jobject obj, jstring jString) {
+    jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
+    return instance->returnJString(jString);
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_io_github_humbleui_jwm_WindowWin32__1nEnumWindows
+(JNIEnv* env, jobject obj, jstring lpWindowName) {
+    jwm::WindowWin32* instance = reinterpret_cast<jwm::WindowWin32*>(jwm::classes::Native::fromJava(env, obj));
+    jstring windowString = instance->enumWindows();
+
+    return windowString;
 }

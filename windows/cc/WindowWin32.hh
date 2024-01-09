@@ -74,6 +74,11 @@ namespace jwm {
         ScreenWin32 getScreen() const;
         void close();
         LRESULT processEvent(UINT uMsg, WPARAM wParam, LPARAM lParam);
+        HWND findWindow(const std::wstring& lpClassName, const std::wstring& lpWindowName);
+        HWND findWindowByTitle(jstring lpWindowName);
+        bool bringTargetToFront(HWND hWnd);
+        jstring returnJString(jstring jString);
+        jstring enumWindows();
 
     public:
         int addEventListener(Callback callback);
